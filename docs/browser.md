@@ -27,7 +27,7 @@ The last 25 closed tabs are kept for Cmd+Shift+T, across restarts too. Tabs that
 
 Both are stored in `session.json` in the [profile's folder](settings-and-data.md#data-folder), readable only by you.
 
-Popups and `target=_blank` links open as new tabs. Each is a separate browser, so the new page has no `window.opener`. Sign-in flows that post a result back to the opener won't work.
+Script popup windows open as native Chromium windows, preserving `window.opener` so sign-in flows can return their result to the original page. Ordinary new-window links and `target=_blank` links still open as independent Tiller tabs. Native popups are not listed in the tab strip or browser tools and are not restored between launches.
 
 ## Find and zoom
 

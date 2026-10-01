@@ -385,8 +385,8 @@ wrap_life_span_handler! {
     struct TillerLifeSpanHandler;
 
     impl LifeSpanHandler {
-        /// Opens popups and new-window links as tabs. The new tab is a separate
-        /// browser, so the page loses `window.opener` to it.
+        /// Keep script popups native so OAuth can post its result to the opener.
+        /// Ordinary new-window links still open as Tiller tabs.
         fn on_before_popup(
             &self,
             browser: Option<&mut Browser>,
@@ -397,12 +397,20 @@ wrap_life_span_handler! {
             target_disposition: WindowOpenDisposition,
             _user_gesture: i32,
             _popup_features: Option<&PopupFeatures>,
-            _window_info: Option<&mut WindowInfo>,
+            window_info: Option<&mut WindowInfo>,
             _client: Option<&mut Option<Client>>,
             _settings: Option<&mut BrowserSettings>,
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
+            if target_disposition == WindowOpenDisposition::NEW_POPUP {
+                if let Some(info) = window_info {
+                    info.parent_view = std::ptr::null_mut();
+                    info.runtime_style = RuntimeStyle::ALLOY;
+                }
+                // Let CEF create the popup, preserving opener and request context.
+                return 0;
+            }
             if let Some(cb) = callbacks_for(browser) && let Some(f) = cb.open_tab {
                 let url = to_cstring(target_url);
                 let background = target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
@@ -415,15 +423,24 @@ wrap_life_span_handler! {
         /// send performClose: to it, tell Swift to remove the tab's view. Tearing
         /// down that view finishes the close and leads to `on_before_close`.
         fn do_close(&self, browser: Option<&mut Browser>) -> i32 {
-            if let Some(cb) = callbacks_for(browser) && let Some(f) = cb.close_ready {
-                unsafe { f(cb.ctx) };
+            let Some(browser) = browser else { return 0 };
+            let is_tab = BROWSERS.with_borrow(|map| map.contains_key(&browser.identifier()));
+            if is_tab {
+                if let Some(cb) = callbacks_for(Some(browser)) && let Some(f) = cb.close_ready {
+                    unsafe { f(cb.ctx) };
+                }
+                return 1;
             }
-            1
+            // Native popups have no Swift tab; CEF owns their windows.
+            0
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else { return };
             let id = browser.identifier();
+            if !BROWSERS.with_borrow(|map| map.contains_key(&id)) {
+                return; // A native popup must not affect the tab registry or app lifetime.
+            }
             fail_devtools_calls(id);
             let empty = BROWSERS.with_borrow_mut(|map| {
                 map.remove(&id);
